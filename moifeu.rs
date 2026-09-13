@@ -35,6 +35,7 @@
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::cmp::max;
 use std::str::FromStr;
 use std::sync::RwLock;
 
@@ -1568,6 +1569,9 @@ pub struct YieldTarget {
     pub execution_complexity: u8,
     pub status: i8,
     pub note: String,
+    /// Epoch microseconds at finalization (for compaction). Only valid for dropped/executed targets.
+    #[serde(default)]
+    pub created_at: u64,
 }
 
 impl YieldTarget {
@@ -1586,6 +1590,7 @@ impl YieldTarget {
             execution_complexity: complexity,
             status: 0,
             note: beam.context.clone().unwrap_or_default(),
+            created_at: 0,
         }
     }
     pub fn is_queued(&self) -> bool {
@@ -1625,6 +1630,9 @@ pub struct YieldLedger {
     pub target_id: u64,
     pub value_captured: f32,
     pub note: String,
+    /// Epoch microseconds at execution time (for compaction).
+    #[serde(default)]
+    pub executed_at: u64,
 }
 
 /// Token bucket manager.
@@ -1647,10 +1655,20 @@ impl TokenBucket {
         let idx = self.queued.iter().position(|t| t.target_id == target_id)?;
         let mut target = self.queued.remove(idx);
         target.status = 1;
+        target.created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
         self.locked.push(target.clone());
         Some(target)
     }
-    pub fn execute(&mut self, target_id: u64, tx_id: u64, value: f32) -> Option<YieldLedger> {
+    pub fn execute(
+        &mut self,
+        target_id: u64,
+        tx_id: u64,
+        value: f32,
+        now_us: Option<u64>,
+    ) -> Option<YieldLedger> {
         let idx = self.locked.iter().position(|t| t.target_id == target_id)?;
         let target = self.locked.remove(idx);
         let ledger = YieldLedger {
@@ -1658,15 +1676,17 @@ impl TokenBucket {
             target_id,
             value_captured: value,
             note: format!("{} executed", target.source_protocol),
+            executed_at: now_us.unwrap_or(0),
         };
         self.executed.push(ledger.clone());
         Some(ledger)
     }
-    pub fn drop(&mut self, target_id: u64) -> Option<YieldTarget> {
+    pub fn drop(&mut self, target_id: u64, now_us: Option<u64>) -> Option<YieldTarget> {
         for vec in [&mut self.queued, &mut self.locked] {
             if let Some(idx) = vec.iter().position(|t| t.target_id == target_id) {
                 let mut target = vec.remove(idx);
                 target.status = -1;
+                target.created_at = now_us.unwrap_or(0);
                 self.dropped.push(target.clone());
                 return Some(target);
             }
@@ -1688,6 +1708,93 @@ impl TokenBucket {
     pub fn total_value(&self) -> f32 {
         self.executed.iter().map(|l| l.value_captured).sum()
     }
+
+    /// Compact old entries to prevent unbounded growth.
+    pub fn compact(&mut self, max_age_us: u64, now_us: u64, max_entries: usize) {
+        let age_cutoff = now_us.saturating_sub(max_age_us);
+
+        if self.executed.len() > max_entries {
+            let min_keep = 50.min(self.executed.len());
+            let mut sorted_indices: Vec<(usize, f32)> = self
+                .executed
+                .iter()
+                .enumerate()
+                .map(|(i, l)| (i, l.value_captured))
+                .collect();
+            sorted_indices
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let top_k: std::collections::HashSet<usize> = sorted_indices
+                .iter()
+                .take(min_keep)
+                .map(|&(i, _)| i)
+                .collect();
+
+            self.executed.retain(|l| {
+                l.executed_at == 0
+                    || l.executed_at > age_cutoff
+                    || top_k.contains(&(l.tx_id as usize % max(self.executed.len(), 1)))
+            });
+        } else if !self.executed.is_empty() {
+            self.executed
+                .retain(|l| l.executed_at == 0 || l.executed_at > age_cutoff);
+        }
+
+        if self.dropped.len() > max_entries / 2 {
+            self.dropped
+                .retain(|t| t.created_at == 0 || t.created_at > age_cutoff);
+        } else if !self.dropped.is_empty() {
+            self.dropped
+                .retain(|t| t.created_at == 0 || t.created_at > age_cutoff);
+        }
+    }
+
+    /// Convenience: compact entries older than N hours.
+    pub fn compact_by_hours(&mut self, max_age_hours: u64, max_entries: usize) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
+        self.compact(max_age_hours * 3600 * 1_000_000, now, max_entries);
+    }
+
+    /// Recycle locked targets that have been stuck for too long.
+    pub fn stale_locks(&mut self, threshold_us: u64) -> usize {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
+        let cutoff = now.saturating_sub(threshold_us);
+
+        let mut recycled = 0;
+        self.locked.retain(|t| {
+            if t.created_at == 0 || t.created_at > cutoff {
+                true
+            } else {
+                recycled += 1;
+                false
+            }
+        });
+        recycled
+    }
+
+    /// Auto-compact with sensible defaults for Zed / Spacetime flood volumes.
+    /// Keeps last 24h of data, max 500 entries per bucket, recycles locks > 2h.
+    pub fn auto_compact(&mut self) -> CompactResult {
+        let recycled = self.stale_locks(7200 * 1_000_000);
+        let max_entries = 500;
+        let had_executed = self.executed.len();
+        let had_dropped = self.dropped.len();
+
+        self.compact_by_hours(24, max_entries);
+
+        CompactResult {
+            recycled_stale_locks: recycled,
+            compacted_executed: had_executed - self.executed.len(),
+            compacted_dropped: had_dropped - self.dropped.len(),
+            stale_locked_remaining: recycled,
+        }
+    }
+
     pub fn summary(&self) -> YieldSummary {
         YieldSummary {
             queued: self.queued_count() as u64,
@@ -1709,6 +1816,15 @@ pub struct YieldSummary {
     pub dropped: u64,
     pub total_captured_usdc: f32,
     pub captured_last_7d_usdc: f32,
+}
+
+/// Compact result tracking.
+#[derive(Debug, Clone, Default)]
+pub struct CompactResult {
+    pub recycled_stale_locks: usize,
+    pub compacted_executed: usize,
+    pub compacted_dropped: usize,
+    pub stale_locked_remaining: usize,
 }
 
 /// Zed-specific Moifeu beam wrapper.
