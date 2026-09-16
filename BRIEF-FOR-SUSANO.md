@@ -38,7 +38,9 @@ Detection rate: ~99.94% for random single-bit flips
 
 ### 3. ✅ Lenia Projection Improved
 **Added**: `calculate_min_grid_size(payload_bytes) -> (width, height)` helper
+**Fixed**: Formula corrected from `2n+2` to `2n+3` (start sentinel + checksum + end sentinel)
 **Improved**: Clear documentation of lossy nature
+**Improved**: Edge case tests added for n=1,2,3,5,9,32,256
 **Note**: Lenia projection remains lossy by design (2D grid for 1D sequence)
 
 For full round-trip without loss: `width * height >= data.len() * 2 + 3`
@@ -91,7 +93,7 @@ CHECKSUM_MOD: 15,973 (prime, fits in encoding)
 | .expect panics | Broken | ✅ FIXED | All impl returns Result |
 | Weak checksum (mod 40) | Nip | ✅ IMPROVED | 16K values, 99.94% detection |
 | Parallel cache flake | Nip | ⚠️ ACK | Pre-existing, passes serially |
-| Lenia lossy projection | Nip | ✅ IMPROVED | Helper function added |
+| Lenia lossy projection | Nip | ✅ IMPROVED | Helper function + formula fix + edge tests |
 
 ## Sword Status: SHEATHED ✅
 

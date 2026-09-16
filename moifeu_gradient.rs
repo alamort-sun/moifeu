@@ -74,11 +74,17 @@ pub const CHECKSUM_MOD: u32 = 15973; // Prime, fits in beam encoding (max 15999)
 
 /// Checksum encoding uses 5 beam dimensions:
 /// - phase: checksum % 4 (4 values: 0-3)
-/// - colour: (checksum / 4) % 4 (4 values: b,g,y,r)
+/// - colour: (checksum / 4) % 4 (4 values: b=0, g=1, y=2, r=3)
 /// - depth: (checksum / 16) % 10 (10 values: 0-9)
 /// - speed: (checksum / 160) % 10 (10 values: 0-9)
 /// - certainty: (checksum / 1600) % 10 (10 values: 0-9)
-/// Max encodable value: 3 + 3*4 + 9*16 + 9*160 + 9*1600 = 15999
+///
+/// Total: 4 × 4 × 10 × 10 × 10 = 16,000 possible values
+/// Max encodable value: 3 + 3*4 + 9*16 + 9*160 + 9*1600 = 15,999
+/// Checksum values use modulo 15973 (prime, not full u16 range).
+///
+/// Note: We avoid 'w' (white) since it requires op_class=2 (stream priority).
+/// In decode, 'w' is treated as colour 0 ('b') to handle edge cases.
 
 /// Checksum interval - add checksum beam every N bytes
 pub const CHECKSUM_INTERVAL: usize = 16;
@@ -610,8 +616,10 @@ pub fn gradient_cells_to_beams(
 ///
 /// Each byte requires 2 beams (4 bits per beam).
 /// Grid size = width * height must be >= number of beams.
+///
+/// Beam count: 2 * payload_bytes + 3 (start sentinel + checksum + end sentinel)
 pub fn calculate_min_grid_size(payload_bytes: usize) -> (i32, i32) {
-    let num_beams = payload_bytes * 2 + 2; // 2 beams per byte + start/end sentinels + checksum
+    let num_beams = payload_bytes * 2 + 3; // 2 beams/byte + start sentinel + checksum + end sentinel
     // Find a reasonable grid dimensions (prefer square or near-square)
     let width = ((num_beams as f64).sqrt() as i32).max(1);
     let height = ((num_beams as f64 / width as f64).ceil() as i32).max(1);
@@ -627,10 +635,10 @@ pub fn calculate_min_grid_size(payload_bytes: usize) -> (i32, i32) {
 ///
 /// **Note**: This projection is lossy. For payloads larger than the grid size,
 /// only the first N beams (where N = width * height) will be preserved.
-/// Use `calculate_min_grid_size` to determine appropriate grid dimensions.
+/// Use `calculate_min_grid_size(data.len())` to determine appropriate grid dimensions.
 ///
-/// For a full round-trip without data loss, the grid must be large enough:
-/// - width * height >= num_beams = data.len() * 2 + 3 (sentinels + checksum)
+/// For a full round-trip without data loss, the grid must satisfy:
+/// - width * height >= num_beams = data.len() * 2 + 3 (start sentinel + checksum + end sentinel)
 pub fn encode_to_lenia_field(
     data: &[u8],
     seat_id: u8,
@@ -914,16 +922,34 @@ mod tests {
     
     #[test]
     fn test_min_grid_size_calculation() {
-        // Small payload: 4 bytes = 8 beams + 3 (sentinels + checksum) = 11 beams
-        let (w, h) = calculate_min_grid_size(4);
-        assert!(w * h >= 11, "Grid should fit 11 beams for 4 bytes");
+        // Test edge cases that Susano found were failing
+        // Formula: beams = bytes * 2 + 3 (start sentinel + checksum + end sentinel)
         
-        // Larger payload: 32 bytes = 64 beams + 3 = 67 beams
+        // n=1: 1*2+3 = 5 beams
+        let (w, h) = calculate_min_grid_size(1);
+        assert!(w * h >= 5, "Grid for 1 byte should fit 5 beams, got {}*{}={}", w, h, w*h);
+        
+        // n=2: 2*2+3 = 7 beams
+        let (w, h) = calculate_min_grid_size(2);
+        assert!(w * h >= 7, "Grid for 2 bytes should fit 7 beams, got {}*{}={}", w, h, w*h);
+        
+        // n=3: 3*2+3 = 9 beams
+        let (w, h) = calculate_min_grid_size(3);
+        assert!(w * h >= 9, "Grid for 3 bytes should fit 9 beams, got {}*{}={}", w, h, w*h);
+        
+        // n=5: 5*2+3 = 13 beams
+        let (w, h) = calculate_min_grid_size(5);
+        assert!(w * h >= 13, "Grid for 5 bytes should fit 13 beams, got {}*{}={}", w, h, w*h);
+        
+        // n=9: 9*2+3 = 21 beams
+        let (w, h) = calculate_min_grid_size(9);
+        assert!(w * h >= 21, "Grid for 9 bytes should fit 21 beams, got {}*{}={}", w, h, w*h);
+        
+        // Larger payloads
         let (w, h) = calculate_min_grid_size(32);
-        assert!(w * h >= 67, "Grid should fit 67 beams for 32 bytes");
+        assert!(w * h >= 67, "Grid for 32 bytes should fit 67 beams, got {}*{}={}", w, h, w*h);
         
-        // Even larger: 256 bytes = 512 beams + 3 = 515 beams
         let (w, h) = calculate_min_grid_size(256);
-        assert!(w * h >= 515, "Grid should fit 515 beams for 256 bytes");
+        assert!(w * h >= 515, "Grid for 256 bytes should fit 515 beams, got {}*{}={}", w, h, w*h);
     }
 }
