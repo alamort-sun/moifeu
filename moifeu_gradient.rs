@@ -156,11 +156,13 @@ pub fn encode_text_to_beams(
         let nibble2 = byte & 0x0F;      // Low 4 bits
         
         // Encode first nibble
-        let beam1 = encode_nibble_to_beam(nibble1, idx as u8 * 2, seat_id, context.clone())?;
+        let phase1 = ((idx % 128) as u8) * 2;  // Prevent overflow
+        let beam1 = encode_nibble_to_beam(nibble1, phase1, seat_id, context.clone())?;
         beams.push(beam1);
         
         // Encode second nibble
-        let beam2 = encode_nibble_to_beam(nibble2, idx as u8 * 2 + 1, seat_id, context.clone())?;
+        let phase2 = ((idx % 128) as u8) * 2 + 1;
+        let beam2 = encode_nibble_to_beam(nibble2, phase2, seat_id, context.clone())?;
         beams.push(beam2);
         
         // Add checksum beam every 16 bytes (32 beams)
@@ -198,13 +200,15 @@ pub fn encode_bytes_to_beams(
         let nibble1 = (byte >> 4) & 0x0F;
         let nibble2 = byte & 0x0F;
         
-        beams.push(encode_nibble_to_beam(nibble1, idx as u8 * 2, seat_id, context.clone())?);
-        beams.push(encode_nibble_to_beam(nibble2, idx as u8 * 2 + 1, seat_id, context.clone())?);
+        let phase1 = ((idx % 128) as u8) * 2;  // Prevent overflow
+        let phase2 = ((idx % 128) as u8) * 2 + 1;
+        beams.push(encode_nibble_to_beam(nibble1, phase1, seat_id, context.clone())?);
+        beams.push(encode_nibble_to_beam(nibble2, phase2, seat_id, context.clone())?);
         
         // Checksum every 16 bytes
         if (idx + 1) % 16 == 0 {
             let checksum = compute_checksum(&data[0..=idx]);
-            beams.push(encode_checksum_to_beam(checksum, idx as u8, seat_id, context.clone())?);
+            beams.push(encode_checksum_to_beam(checksum, (idx % 256) as u8, seat_id, context.clone())?);
         }
     }
     
@@ -232,7 +236,7 @@ fn create_sentinel_beam(
         builder = builder.context(ctx);
     }
     builder.build()
-        .unwrap_or_else(|_| MoifeuBeam::default())
+        .expect("Failed to build sentinel beam")
 }
 
 /// Encodes a 4-bit nibble into a Moifeu beam
@@ -335,10 +339,13 @@ pub fn decode_beams_to_bytes(
     beams: &[MoifeuBeam],
 ) -> Result<Vec<u8>, MoifeuGradientError> {
     // Find start and end sentinels
-    let (start_idx, end_idx) = find_sentinel_beams(beams)?;
-    
-    // Extract data beams between sentinels
-    let data_beams = &beams[start_idx + 1..end_idx];
+    let data_beams = match find_sentinel_beams(beams) {
+        Ok((start, end)) => &beams[start + 1..end],
+        Err(_) => {
+            // No sentinels found - treat all beams as data beams (lossy mode)
+            beams
+        }
+    };
     
     if data_beams.is_empty() {
         return Err(MoifeuGradientError::EmptyData);
@@ -529,7 +536,7 @@ pub fn gradient_cells_to_beams(
                 .input(cell.whisper.clone())
                 .operation("GRADIENT")
                 .build()
-                .unwrap_or_else(|_| MoifeuBeam::default())
+                .expect("Failed to build gradient cell beam")
         })
         .collect()
 }

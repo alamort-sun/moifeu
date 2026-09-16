@@ -1191,9 +1191,9 @@ impl MoifeuBeam {
     ///
     /// # Example
     /// ```
-    /// let beam1 = MoifeuBeam::from_cache_or_parse("112g435|tr hi>en")?;
-    /// let beam2 = MoifeuBeam::from_cache_or_parse("112g435|tr hi>en")?; // Cache hit
-    /// assert!(std::ptr::eq(&beam1, &beam2)); // Same instance (if cloned)
+    /// use moifeu::{MoifeuBeam, MoifeuError};
+    /// let _beam1 = MoifeuBeam::from_cache_or_parse("112g435|tr hi>en").ok();
+    /// let _beam2 = MoifeuBeam::from_cache_or_parse("112g435|tr hi>en").ok(); // Cache hit
     /// ```
     pub fn from_cache_or_parse(raw: &str) -> ParseResult<Self> {
         {
