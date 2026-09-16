@@ -4,12 +4,11 @@ version = "1.0.0"
 edition = "2021"
 
 [lib]
-path = "fog/mod.rs"
-crate-type = ["cdylib"]
-
-[[bin]]
-name = "moifeu-pipeline"
+name = "moifeu"
 path = "moifeu.rs"
+
+[features]
+async = []
 
 [dependencies]
 sha2 = "0.10"
@@ -19,7 +18,7 @@ tokio = { version = "1", features = ["full"] }
 url = "2"
 futures-util = "0.3"
 rand = "0.8"
-a_la_mort-core = { path = "../core" }
+lazy_static = "1"
 
 [profile.release]
 opt-level = "s"

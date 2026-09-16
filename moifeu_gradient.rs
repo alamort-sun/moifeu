@@ -216,7 +216,7 @@ pub fn encode_bytes_to_beams(
 
 /// Creates a sentinel beam marking start or end of payload
 fn create_sentinel_beam(
-    seat_id: u8,
+    _seat_id: u8,
     op: &str,
     context: Option<String>,
     is_start: bool,
@@ -244,7 +244,7 @@ fn encode_nibble_to_beam(
     nibble: u8,
     phase: u8,
     seat_id: u8,
-    context: Option<String>,
+    _context: Option<String>,
 ) -> Result<MoifeuBeam, MoifeuGradientError> {
     // Extract 2 bits for colour and 2 bits for depth
     let colour_bits = (nibble >> 2) & 0x03;
@@ -280,7 +280,7 @@ fn encode_checksum_to_beam(
     checksum: u16,
     phase: u8,
     seat_id: u8,
-    context: Option<String>,
+    _context: Option<String>,
 ) -> Result<MoifeuBeam, MoifeuGradientError> {
     // Use checksum value to set beam parameters
     let colour_idx = (checksum % 5) as u8;

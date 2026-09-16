@@ -1731,11 +1731,12 @@ impl TokenBucket {
                 .take(min_keep)
                 .map(|&(i, _)| i)
                 .collect();
+            let executed_len = self.executed.len();
 
             self.executed.retain(|l| {
                 l.executed_at == 0
                     || l.executed_at > age_cutoff
-                    || top_k.contains(&(l.tx_id as usize % max(self.executed.len(), 1)))
+                    || top_k.contains(&(l.tx_id as usize % max(executed_len, 1)))
             });
         } else if !self.executed.is_empty() {
             self.executed
