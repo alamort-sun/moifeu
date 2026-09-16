@@ -1971,9 +1971,9 @@ impl FromIterator<ZedMoifeuBeam> for ZedMoifeuBatch {
 
 // Re-export gradient codec functions for convenience
 pub use moifeu_gradient::{
-    beams_to_gradient_cells, beams_to_wire_format, decode_beams_to_bytes,
-    decode_beams_to_text, decode_from_lenia_field, encode_bytes_to_beams,
-    encode_text_to_beams, encode_to_lenia_field, gradient_cells_to_beams,
-    wire_format_to_beams, MoifeuGradientError, BYTES_PER_BEAM, MAX_PAYLOAD_BYTES,
-    SENTINEL_START_OP, SENTINEL_END_OP,
+    beams_to_gradient_cells, beams_to_wire_format, calculate_min_grid_size,
+    decode_beams_to_bytes, decode_beams_to_text, decode_from_lenia_field,
+    encode_bytes_to_beams, encode_text_to_beams, encode_to_lenia_field,
+    gradient_cells_to_beams, wire_format_to_beams, MoifeuGradientError,
+    BYTES_PER_BEAM, MAX_PAYLOAD_BYTES, SENTINEL_START_OP, SENTINEL_END_OP,
 };

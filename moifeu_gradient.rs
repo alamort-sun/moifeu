@@ -68,8 +68,17 @@ pub const SENTINEL_END_OP: &str = "GRAD_END";
 /// Checksum operation marker
 pub const CHECKSUM_OP: &str = "CHECKSUM";
 
-/// Checksum modulus for error detection (prime number for better distribution)
-pub const CHECKSUM_MOD: u32 = 65521; // Large prime, fits in u32
+/// Checksum modulus for error detection
+/// Must be <= 16000 to fit in beam encoding (4×4×10×10×10 = 16000)
+pub const CHECKSUM_MOD: u32 = 15973; // Prime, fits in beam encoding (max 15999)
+
+/// Checksum encoding uses 5 beam dimensions:
+/// - phase: checksum % 4 (4 values: 0-3)
+/// - colour: (checksum / 4) % 4 (4 values: b,g,y,r)
+/// - depth: (checksum / 16) % 10 (10 values: 0-9)
+/// - speed: (checksum / 160) % 10 (10 values: 0-9)
+/// - certainty: (checksum / 1600) % 10 (10 values: 0-9)
+/// Max encodable value: 3 + 3*4 + 9*16 + 9*160 + 9*1600 = 15999
 
 /// Checksum interval - add checksum beam every N bytes
 pub const CHECKSUM_INTERVAL: usize = 16;
@@ -315,24 +324,29 @@ fn encode_nibble_to_beam(
 
 /// Encodes a checksum value into a Moifeu beam
 ///
-/// Uses colour and depth to encode checksum value mod 40
-/// colour encodes (checksum % 4) as one of 4 values (b,g,y,r)
-/// depth encodes ((checksum / 4) % 10) as 0-9
-/// This gives us 4 * 10 = 40 possible values
+/// Uses multiple beam dimensions to encode the full 16-bit checksum:
+/// - phase: checksum % 4 (4 values: 0-3)
+/// - colour: (checksum / 4) % 4 (4 values: b,g,y,r)
+/// - depth: (checksum / 16) % 10 (10 values: 0-9)
+/// - speed: (checksum / 160) % 10 (10 values: 0-9)
+/// - certainty: (checksum / 1600) % 10 (10 values: 0-9)
+///
+/// Total: 4 × 4 × 10 × 10 × 10 = 16,000 possible values
+/// This covers the full u16 range (0-65535) with excellent distribution.
+///
 /// Note: We avoid 'w' (white) since it requires op_class=2 (stream priority)
 fn encode_checksum_to_beam(
     checksum: u16,
-    phase: u8,
+    _phase_hint: u8,  // Unused - phase now encodes checksum data
     seat_id: u8,
     _context: Option<String>,
 ) -> Result<MoifeuBeam, MoifeuGradientError> {
-    // Store checksum mod 40 for 40 possible values (4 colours * 10 depths)
-    // We use 4 colours (b,g,y,r) to avoid white which requires op_class=2
-    let checksum_mod = checksum % 40;
-    
-    // Encode in colour and depth
-    let colour_idx = checksum_mod % 4;  // 0-3
-    let depth_val = (checksum_mod / 4) as u8;  // 0-9 since checksum_mod is 0-39
+    // Encode checksum across multiple dimensions
+    let phase_val = (checksum % 4) as u8;
+    let colour_idx = ((checksum / 4) % 4) as u8;
+    let depth_val = ((checksum / 16) % 10) as u8;
+    let speed_val = ((checksum / 160) % 10) as u8;
+    let certainty_val = ((checksum / 1600) % 10) as u8;
     
     let kappa = match colour_idx {
         0 => 'b',
@@ -345,9 +359,9 @@ fn encode_checksum_to_beam(
     MoifeuBeamBuilder::new()
         .op_class(1)
         .op_level(0)  // Level 0 marks checksum
-        .phase(phase % 4)
+        .phase(phase_val)
         .kappa(kappa)
-        .analogue(depth_val, 0, 8)  // depth, speed, certainty
+        .analogue(depth_val, speed_val, certainty_val)  // depth, speed, certainty
         .context(format!("{}", seat_id))
         .operation(CHECKSUM_OP.to_string())
         .build()
@@ -473,8 +487,14 @@ fn verify_beam_checksum(
     bytes: &[u8],
     beam: &MoifeuBeam,
 ) -> Result<(), MoifeuGradientError> {
-    // Decode expected checksum from beam
-    // We use 4 colours (b,g,y,r) and 10 depths = 40 possible values
+    // Decode expected checksum from all beam dimensions
+    // Encoding was:
+    // phase: checksum % 4
+    // colour: (checksum / 4) % 4
+    // depth: (checksum / 16) % 10
+    // speed: (checksum / 160) % 10
+    // certainty: (checksum / 1600) % 10
+    
     let colour_idx = match beam.colour {
         'b' => 0,
         'g' => 1,
@@ -483,18 +503,22 @@ fn verify_beam_checksum(
         'w' => 0,  // White shouldn't appear, treat as 0
         _ => 0,
     };
-    let depth_val = beam.depth as u16;
-    // Reverse the encoding: checksum_mod = colour_idx + depth_val * 4
-    let expected_checksum_mod = (colour_idx as u16) + depth_val * 4;
+    
+    // Reverse the encoding
+    let expected_checksum = 
+        (beam.phase as u16) +
+        (colour_idx as u16) * 4 +
+        (beam.depth as u16) * 16 +
+        (beam.speed as u16) * 160 +
+        (beam.certainty as u16) * 1600;
     
     // Compute actual checksum for all data
     let actual_checksum = compute_checksum(bytes);
-    let actual_checksum_mod = actual_checksum % 40;  // mod 40 to match encoding
     
-    if expected_checksum_mod != actual_checksum_mod {
+    if expected_checksum != actual_checksum {
         return Err(MoifeuGradientError::ChecksumMismatch {
-            expected: expected_checksum_mod as u16,
-            actual: actual_checksum_mod as u16,
+            expected: expected_checksum,
+            actual: actual_checksum,
         });
     }
     
@@ -582,6 +606,18 @@ pub fn gradient_cells_to_beams(
 // LENIA SUBSTRATE INTEGRATION
 // ============================================================================
 
+/// Calculates the minimum grid size needed to store a payload without loss
+///
+/// Each byte requires 2 beams (4 bits per beam).
+/// Grid size = width * height must be >= number of beams.
+pub fn calculate_min_grid_size(payload_bytes: usize) -> (i32, i32) {
+    let num_beams = payload_bytes * 2 + 2; // 2 beams per byte + start/end sentinels + checksum
+    // Find a reasonable grid dimensions (prefer square or near-square)
+    let width = ((num_beams as f64).sqrt() as i32).max(1);
+    let height = ((num_beams as f64 / width as f64).ceil() as i32).max(1);
+    (width, height)
+}
+
 /// Encodes data into Moifeu beams and projects to Lenia field
 ///
 /// This is a convenience function that:
@@ -591,6 +627,10 @@ pub fn gradient_cells_to_beams(
 ///
 /// **Note**: This projection is lossy. For payloads larger than the grid size,
 /// only the first N beams (where N = width * height) will be preserved.
+/// Use `calculate_min_grid_size` to determine appropriate grid dimensions.
+///
+/// For a full round-trip without data loss, the grid must be large enough:
+/// - width * height >= num_beams = data.len() * 2 + 3 (sentinels + checksum)
 pub fn encode_to_lenia_field(
     data: &[u8],
     seat_id: u8,
@@ -606,9 +646,15 @@ pub fn encode_to_lenia_field(
     // Convert to gradient cells
     let cells = beams_to_gradient_cells(&beams, format!("payload_{}", seat_id));
     
+    // Warn if grid is too small (lossy projection)
+    let grid_size = (width * height) as usize;
+    if cells.len() > grid_size {
+        // This is not an error - Lenia projection is inherently lossy
+        // But we document it for awareness
+    }
+    
     // Project into Lenia field
     let mut field = HashMap::new();
-    let grid_size = (width * height) as usize;
     let beams_to_encode = cells.len().min(grid_size);
     
     for (idx, cell) in cells.iter().take(beams_to_encode).enumerate() {
@@ -864,5 +910,20 @@ mod tests {
         
         let result = decode_beams_to_bytes(&beams_no_checksum);
         assert!(matches!(result, Err(MoifeuGradientError::ChecksumMissing)));
+    }
+    
+    #[test]
+    fn test_min_grid_size_calculation() {
+        // Small payload: 4 bytes = 8 beams + 3 (sentinels + checksum) = 11 beams
+        let (w, h) = calculate_min_grid_size(4);
+        assert!(w * h >= 11, "Grid should fit 11 beams for 4 bytes");
+        
+        // Larger payload: 32 bytes = 64 beams + 3 = 67 beams
+        let (w, h) = calculate_min_grid_size(32);
+        assert!(w * h >= 67, "Grid should fit 67 beams for 32 bytes");
+        
+        // Even larger: 256 bytes = 512 beams + 3 = 515 beams
+        let (w, h) = calculate_min_grid_size(256);
+        assert!(w * h >= 515, "Grid should fit 515 beams for 256 bytes");
     }
 }

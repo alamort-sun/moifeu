@@ -1,6 +1,0 @@
-warning: alamot-moifeu v1.0.0 (/Users/evelynn8bit/Desktop/alamort/moifeu) ignoring invalid dependency `alamot-core` which is missing a lib target
-error: can't find lib `alamot_moifeu` at path `/Users/evelynn8bit/Desktop/alamort/moifeu/fog/mod.rs`
- --> /Users/evelynn8bit/Desktop/alamort/moifeu/Cargo.toml
-error: can't find lib `alamot_moifeu` at path `/Users/evelynn8bit/Desktop/alamort/moifeu/fog/mod.rs`
- --> /Users/evelynn8bit/Desktop/alamort/moifeu/Cargo.toml
-error: could not compile due to 2 previous target resolution errors
