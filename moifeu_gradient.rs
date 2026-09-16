@@ -4,6 +4,19 @@
 //! as the fundamental representation. All data is encoded as sequences of Moifeu
 //! beams, where the beam dimensions carry the gradient information.
 //!
+//! ## Limitations and Honest Docs
+//!
+//! This is a **lossy codec** for payload sizes > 256 bytes due to phase wrapping.
+//! The phase field (φ) is u8, so for payloads > 256 nibbles (128 bytes), phase values
+//! wrap around, potentially causing decoding errors.
+//!
+//! **No error detection**: Checksum verification was removed as it was fundamentally broken
+//! (257 possible checksum values cannot be encoded in 5 colours × 10 depths = 50 combinations).
+//!
+//! **Lenia projection is lossy**: The `encode_to_lenia_field` function projects beams to a
+//! fixed 8x8 grid of fmap_5 cells. Only the first 64 beams (32 bytes) are preserved.
+//! The `decode_from_lenia_field` function cannot recover the original beam sequence.
+//!
 //! ## Architecture
 //!
 //! Moifeu beams have 7 header dimensions (τ1, τ2, φ, κ, αd, αs, αc) and a body.
@@ -54,9 +67,6 @@ pub const SENTINEL_START_OP: &str = "GRAD_START";
 /// Sentinel beam operation for end of payload
 pub const SENTINEL_END_OP: &str = "GRAD_END";
 
-/// Checksum modulus for error detection
-pub const CHECKSUM_MOD: u16 = 257;
-
 // ============================================================================
 // ERROR TYPES
 // ============================================================================
@@ -65,8 +75,6 @@ pub const CHECKSUM_MOD: u16 = 257;
 pub enum MoifeuGradientError {
     /// Payload exceeds maximum size
     PayloadTooLarge(usize),
-    /// Invalid checksum - data corrupted
-    ChecksumMismatch { expected: u16, actual: u16 },
     /// Sentinel not found - not a valid encoded sequence
     SentinelNotFound,
     /// Invalid UTF-8 in decoded data
@@ -82,9 +90,6 @@ impl std::fmt::Display for MoifeuGradientError {
         match self {
             MoifeuGradientError::PayloadTooLarge(size) => {
                 write!(f, "Payload too large: {} bytes (max {})", size, MAX_PAYLOAD_BYTES)
-            }
-            MoifeuGradientError::ChecksumMismatch { expected, actual } => {
-                write!(f, "Checksum mismatch: expected {}, got {}", expected, actual)
             }
             MoifeuGradientError::SentinelNotFound => {
                 write!(f, "Sentinel not found - not a valid encoded beam sequence")
@@ -164,13 +169,6 @@ pub fn encode_text_to_beams(
         let phase2 = ((idx % 128) as u8) * 2 + 1;
         let beam2 = encode_nibble_to_beam(nibble2, phase2, seat_id, context.clone())?;
         beams.push(beam2);
-        
-        // Add checksum beam every 16 bytes (32 beams)
-        if (idx + 1) % 16 == 0 {
-            let checksum = compute_checksum(&bytes[0..=idx]);
-            let checksum_beam = encode_checksum_to_beam(checksum, idx as u8, seat_id, context.clone())?;
-            beams.push(checksum_beam);
-        }
     }
     
     // Add end sentinel with length
@@ -204,12 +202,6 @@ pub fn encode_bytes_to_beams(
         let phase2 = ((idx % 128) as u8) * 2 + 1;
         beams.push(encode_nibble_to_beam(nibble1, phase1, seat_id, context.clone())?);
         beams.push(encode_nibble_to_beam(nibble2, phase2, seat_id, context.clone())?);
-        
-        // Checksum every 16 bytes
-        if (idx + 1) % 16 == 0 {
-            let checksum = compute_checksum(&data[0..=idx]);
-            beams.push(encode_checksum_to_beam(checksum, (idx % 256) as u8, seat_id, context.clone())?);
-        }
     }
     
     // End sentinel
@@ -280,47 +272,6 @@ fn encode_nibble_to_beam(
         .map_err(MoifeuGradientError::InvalidBeam)
 }
 
-/// Encodes a checksum value into a Moifeu beam
-fn encode_checksum_to_beam(
-    checksum: u16,
-    phase: u8,
-    seat_id: u8,
-    _context: Option<String>,
-) -> Result<MoifeuBeam, MoifeuGradientError> {
-    // Use checksum value to set beam parameters
-    let colour_idx = (checksum % 5) as u8;
-    let kappa = match colour_idx {
-        0 => 'b',
-        1 => 'g',
-        2 => 'y',
-        3 => 'r',
-        4 => 'w',
-        _ => 'g',
-    };
-    
-    let depth = ((checksum / 53) % 10) as u8; // Spread across range
-    
-    MoifeuBeamBuilder::new()
-        .op_class(if kappa == 'w' { 2 } else { 1 })
-        .op_level(0)  // Level 0 marks checksum
-        .phase(phase % 4)
-        .kappa(kappa)
-        .analogue(depth, 0, 8)  // depth, speed, certainty
-        .context(format!("{}", seat_id))
-        .operation("CHECKSUM".to_string())
-        .build()
-        .map_err(MoifeuGradientError::InvalidBeam)
-}
-
-/// Computes a simple checksum for error detection
-fn compute_checksum(data: &[u8]) -> u16 {
-    let mut sum: u32 = 0;
-    for (idx, &byte) in data.iter().enumerate() {
-        sum = sum.wrapping_add(byte as u32 * (idx as u32 + 1));
-    }
-    (sum % CHECKSUM_MOD as u32) as u16
-}
-
 // ============================================================================
 // CORE DECODING: Moifeu Beam Sequence → Data
 // ============================================================================
@@ -353,15 +304,8 @@ pub fn decode_beams_to_bytes(
     
     // Decode nibbles and combine into bytes
     let mut nibbles = Vec::new();
-    let mut checksum_beams = Vec::new();
     
     for beam in data_beams {
-        // Check if this is a checksum beam
-        if beam.op_level == 0 && beam.op.as_deref() == Some("CHECKSUM") {
-            checksum_beams.push(beam);
-            continue;
-        }
-        
         // Decode nibble from beam
         let nibble = decode_beam_to_nibble(beam)?;
         nibbles.push(nibble);
@@ -375,9 +319,6 @@ pub fn decode_beams_to_bytes(
             bytes.push(byte);
         }
     }
-    
-    // Verify checksums - TODO: broken, skip for now
-    // verify_beam_checksums(&bytes, &checksum_beams)?;
     
     Ok(bytes)
 }
@@ -423,44 +364,6 @@ fn decode_beam_to_nibble(beam: &MoifeuBeam) -> Result<u8, MoifeuGradientError> {
     
     // Combine: colour_bits (2 bits) << 2 | depth_bits (2 bits)
     Ok((colour_bits << 2) | depth_bits)
-}
-
-/// Verifies checksums in the decoded data
-#[allow(dead_code)]
-fn verify_beam_checksums(
-    bytes: &[u8],
-    checksum_beams: &[&MoifeuBeam],
-) -> Result<(), MoifeuGradientError> {
-    if checksum_beams.is_empty() {
-        return Ok(()); // No checksums to verify
-    }
-    
-    for beam in checksum_beams {
-        // Extract checksum value from beam
-        let colour_val = match beam.colour {
-            'b' => 0,
-            'g' => 1,
-            'y' => 2,
-            'r' => 3,
-            'w' => 4,
-            _ => 0,
-        };
-        let depth_val = beam.depth;
-        let expected_checksum = (colour_val as u16 * 53 + depth_val as u16) % CHECKSUM_MOD;
-        
-        // Compute actual checksum for data up to this point
-        let data_end = (beam.phase as usize * 2).min(bytes.len());
-        let actual_checksum = compute_checksum(&bytes[0..data_end]);
-        
-        if expected_checksum != actual_checksum {
-            return Err(MoifeuGradientError::ChecksumMismatch {
-                expected: expected_checksum,
-                actual: actual_checksum,
-            });
-        }
-    }
-    
-    Ok(())
 }
 
 // ============================================================================

@@ -142,7 +142,7 @@ pub type ParseResult<T> = Result<T, MoifeuError>;
 
 const OPS: &[&str] = &[
     "tr", "sm", "an", "gen", "ex", "cl", "cmp", "fix", "exp", "fmt", "chk", "cvt", "red",
-    "GRAD_START", "GRAD_END", "CHECKSUM", "DATA", "GRADIENT",
+    "GRAD_START", "GRAD_END", "DATA", "GRADIENT",
 ];
 const MODS: &[&str] = &["brf", "det", "fml", "inf", "json", "txt", "code", "tbl"];
 const LANGS: &[&str] = &[
@@ -1975,5 +1975,5 @@ pub use moifeu_gradient::{
     decode_beams_to_text, decode_from_lenia_field, encode_bytes_to_beams,
     encode_text_to_beams, encode_to_lenia_field, gradient_cells_to_beams,
     wire_format_to_beams, MoifeuGradientError, BYTES_PER_BEAM, MAX_PAYLOAD_BYTES,
-    CHECKSUM_MOD, SENTINEL_START_OP, SENTINEL_END_OP,
+    SENTINEL_START_OP, SENTINEL_END_OP,
 };
