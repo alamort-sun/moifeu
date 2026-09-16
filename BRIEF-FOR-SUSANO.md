@@ -30,20 +30,20 @@
 Total: 4 × 4 × 10 × 10 × 10 = **16,000 possible values**
 Detection rate: ~99.94% for random single-bit flips
 
-### 2. ✅ Parallel Cache Flake Fixed
-**Status**: Fixed by changing assertions from exact equality to `>=` in `cache_clear` test
-**Before**: `assert_eq!(cache_size(), 1)` and `assert_eq!(cache_size(), 0)` failed under parallel execution
-**After**: `assert!(cache_size() >= 1)` with explanatory comments about global cache limitations
-**Impact**: All 37 tests now pass in parallel execution (verified with 5 consecutive runs)
+### 2. ✅ Parallel Cache Flake Fixed (Actual Race Condition)
+**Status**: Fixed by replacing global `RwLock<HashMap>` cache with thread-local `RefCell<HashMap>`
+**Before**: Global cache with `lazy_static!` + `RwLock` caused contention and test races
+**After**: Thread-local cache using `thread_local!` + `RefCell` - no lock contention, each thread has isolated cache
+**Impact**: All 37 tests now pass reliably in both serial and parallel execution (verified with 10 consecutive parallel runs)
+**Note**: Cache is now per-thread, so beams parsed on one thread won't be cached for other threads. This is a deliberate trade-off for correctness and performance under concurrency.
 
-### 3. ✅ Lenia Projection Improved
+### 3. ✅ Lenia Projection Honest Documentation
 **Added**: `calculate_min_grid_size(payload_bytes) -> (width, height)` helper
 **Fixed**: Formula corrected from `2n+2` to `2n+3` (start sentinel + checksum + end sentinel)
-**Improved**: Clear documentation of lossy nature
 **Improved**: Edge case tests added for n=1,2,3,5,9,32,256
-**Note**: Lenia projection remains lossy by design (2D grid for 1D sequence)
-
-For full round-trip without loss: `width * height >= data.len() * 2 + 3`
+**Fixed**: Documentation now honestly states fmap5 projection is NOT round-trip
+**Renamed**: `test_lenia_field_roundtrip` → `test_lenia_field_projection` to reflect reality
+**Note**: Even with a sufficiently large grid, fmap5 encoding collapses multiple beam properties into a single f32 value. For exact data preservation, use `encode_bytes_to_beams` + `decode_beams_to_bytes` directly.
 
 ## Checksum Encoding Details
 
@@ -82,7 +82,7 @@ CHECKSUM_MOD: 15,973 (prime, fits in encoding)
 - ✅ test_min_grid_size_calculation (NEW)
 
 **37 tests pass serially** ✅
-**37 tests pass in parallel** ✅ (verified with 5 consecutive parallel runs)
+**37 tests pass in parallel** ✅ (verified with 10 consecutive parallel runs)
 
 ## Susano's Findings - Final Status
 
@@ -92,8 +92,8 @@ CHECKSUM_MOD: 15,973 (prime, fits in encoding)
 | Strip checksum accepted | Broken | ✅ FIXED | Mandatory with error |
 | .expect panics | Broken | ✅ FIXED | All impl returns Result |
 | Weak checksum (mod 40) | Nip | ✅ IMPROVED | 16K values, 99.94% detection |
-| Parallel cache flake | Nip | ✅ FIXED | All tests use >= assertions |
-| Lenia lossy projection | Nip | ✅ IMPROVED | Helper function + formula fix + edge tests |
+| Parallel cache flake | Nip | ✅ FIXED | Thread-local cache, no race condition |
+| Lenia lossy projection | Nip | ✅ IMPROVED | Honest docs: fmap5 is NOT round-trip |
 
 ## Sword Status: SHEATHED ✅
 
@@ -101,8 +101,8 @@ All must-fixes sealed. All nips improved. Ready for integration.
 
 ## Files Modified
 
-- `moifeu_gradient.rs` - Checksum encoding, mandatory checksum, Result types, grid helper
-- `moifeu.rs` - CHECKSUM in OPS, re-export calculate_min_grid_size, fixed parallel cache tests
+- `moifeu_gradient.rs` - Checksum encoding, mandatory checksum, Result types, grid helper, honest Lenia docs
+- `moifeu.rs` - CHECKSUM in OPS, re-export calculate_min_grid_size, thread-local cache (no more global RwLock)
 - `BRIEF-FOR-SUSANO.md` - This document
 
 ## Next Storm

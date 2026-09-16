@@ -32,12 +32,11 @@
 //! The `GradientCell` struct represents the fog field data from SpacetimeDB,
 //! containing density, stance, angle, hue, saturation, and whisper for each seat.
 
-use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::cmp::max;
 use std::str::FromStr;
-use std::sync::RwLock;
 
 // Re-export gradient codec for Moifeu-based gradient encoding
 pub mod moifeu_gradient;
@@ -1174,64 +1173,63 @@ impl FromIterator<MoifeuBeam> for MoifeuBeamBatch {
 // CACHING
 // ============================================================================
 
-lazy_static! {
-    /// Global cache for parsed beams
-    ///
-    /// Stores beam strings and their parsed representations to avoid
-    /// redundant parsing of frequently used beams.
-    static ref BEAM_CACHE: RwLock<HashMap<String, MoifeuBeam>> =
-        RwLock::new(HashMap::new());
+/// Thread-local cache for parsed beams
+///
+/// Uses thread-local storage to avoid lock contention between threads.
+/// Each thread maintains its own cache, so there's no sharing but also no contention.
+/// This is more efficient than a global lock for most use cases.
+thread_local! {
+    static BEAM_CACHE: RefCell<HashMap<String, MoifeuBeam>> =
+        RefCell::new(HashMap::new());
 }
 
 impl MoifeuBeam {
     /// Parse a beam from cache or parse it fresh
     ///
-    /// If the beam has been parsed before, returns the cached version.
-    /// Otherwise, parses it and caches the result.
+    /// If the beam has been parsed before on this thread, returns the cached version.
+    /// Otherwise, parses it and caches the result locally to this thread.
+    ///
+    /// **Note**: The cache is thread-local, so beam strings parsed on one thread
+    /// will need to be re-parsed on other threads. This design avoids lock
+    /// contention and provides better performance under concurrent load.
     ///
     /// # Example
     /// ```
     /// use moifeu::{MoifeuBeam, MoifeuError};
     /// let _beam1 = MoifeuBeam::from_cache_or_parse("112g435|tr hi>en").ok();
-    /// let _beam2 = MoifeuBeam::from_cache_or_parse("112g435|tr hi>en").ok(); // Cache hit
+    /// let _beam2 = MoifeuBeam::from_cache_or_parse("112g435|tr hi>en").ok(); // Cache hit (same thread)
     /// ```
     pub fn from_cache_or_parse(raw: &str) -> ParseResult<Self> {
-        {
-            let cache = BEAM_CACHE
-                .read()
-                .map_err(|_| MoifeuError::ParseError("cache lock poisoned".into()))?;
-            if let Some(beam) = cache.get(raw) {
+        BEAM_CACHE.with(|cache| {
+            let mut cache_borrow = cache.borrow_mut();
+            if let Some(beam) = cache_borrow.get(raw) {
                 return Ok(beam.clone());
             }
-        }
-
-        let beam = parse_beam(raw)?;
-        {
-            let mut cache = BEAM_CACHE
-                .write()
-                .map_err(|_| MoifeuError::ParseError("cache lock poisoned".into()))?;
-            cache.insert(raw.to_string(), beam.clone());
-        }
-        Ok(beam)
+            
+            let beam = parse_beam(raw)?;
+            cache_borrow.insert(raw.to_string(), beam.clone());
+            Ok(beam)
+        })
     }
 
-    /// Clear the beam cache
+    /// Clear the beam cache for the current thread
     ///
     /// Useful for freeing memory or when beam definitions change.
+    /// Only affects the current thread's cache.
     pub fn clear_cache() -> ParseResult<()> {
-        let mut cache = BEAM_CACHE
-            .write()
-            .map_err(|_| MoifeuError::ParseError("cache lock poisoned".into()))?;
-        cache.clear();
-        Ok(())
+        BEAM_CACHE.with(|cache| {
+            cache.borrow_mut().clear();
+            Ok(())
+        })
     }
 
-    /// Get cache size
+    /// Get cache size for the current thread
+    ///
+    /// Returns the number of cached beam entries for this thread only.
     pub fn cache_size() -> ParseResult<usize> {
-        let cache = BEAM_CACHE
-            .read()
-            .map_err(|_| MoifeuError::ParseError("cache lock poisoned".into()))?;
-        Ok(cache.len())
+        BEAM_CACHE.with(|cache| {
+            Ok(cache.borrow().len())
+        })
     }
 }
 

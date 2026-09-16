@@ -633,12 +633,15 @@ pub fn calculate_min_grid_size(payload_bytes: usize) -> (i32, i32) {
 /// 2. Converts beams to GradientCells
 /// 3. Projects gradient cells into Lenia fmap_5 field deviations
 ///
-/// **Note**: This projection is lossy. For payloads larger than the grid size,
-/// only the first N beams (where N = width * height) will be preserved.
-/// Use `calculate_min_grid_size(data.len())` to determine appropriate grid dimensions.
+/// **WARNING**: This projection is **inherently lossy** and does NOT provide
+/// a full round-trip. Even with a sufficiently large grid (width * height >= num_beams),
+/// the fmap5 encoding collapses multiple beam properties (colour, depth, phase, etc.)
+/// into a single f32 value, which cannot be perfectly reversed.
 ///
-/// For a full round-trip without data loss, the grid must satisfy:
-/// - width * height >= num_beams = data.len() * 2 + 3 (start sentinel + checksum + end sentinel)
+/// Use `calculate_min_grid_size(data.len())` to determine grid dimensions that
+/// can fit all beams, but note that the Lenia projection itself loses information.
+/// For exact data preservation, use `encode_bytes_to_beams` + `decode_beams_to_bytes`
+/// directly, NOT the Lenia field projection.
 pub fn encode_to_lenia_field(
     data: &[u8],
     seat_id: u8,
@@ -862,17 +865,19 @@ mod tests {
     }
     
     #[test]
-    fn test_lenia_field_roundtrip() {
+    fn test_lenia_field_projection() {
+        // Note: This is NOT a round-trip test. Lenia projection is inherently lossy.
+        // This test only verifies that encoding and decoding produce non-empty results.
         let data = b"Test Lenia";
         let field = encode_to_lenia_field(data, 13, 0, 0, 8, 8, 0.3)
             .expect("Should encode to field");
         
-        assert!(!field.is_empty());
+        assert!(!field.is_empty(), "Encoded field should not be empty");
         
-        // Decode back (will be lossy for large payloads)
+        // Decode back - will be lossy (fmap5 cannot perfectly preserve beam properties)
         let beams = decode_from_lenia_field(&field, 0, 0, 8, 8)
             .expect("Should decode from field");
-        assert!(!beams.is_empty());
+        assert!(!beams.is_empty(), "Decoded beams should not be empty");
     }
     
     #[test]
