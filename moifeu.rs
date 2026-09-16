@@ -142,7 +142,7 @@ pub type ParseResult<T> = Result<T, MoifeuError>;
 
 const OPS: &[&str] = &[
     "tr", "sm", "an", "gen", "ex", "cl", "cmp", "fix", "exp", "fmt", "chk", "cvt", "red",
-    "GRAD_START", "GRAD_END", "DATA", "GRADIENT",
+    "GRAD_START", "GRAD_END", "DATA", "GRADIENT", "CHECKSUM",
 ];
 const MODS: &[&str] = &["brf", "det", "fml", "inf", "json", "txt", "code", "tbl"];
 const LANGS: &[&str] = &[
