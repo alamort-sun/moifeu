@@ -90,6 +90,8 @@ pub enum MoifeuGradientError {
     InvalidUtf8,
     /// No data beams found
     EmptyData,
+    /// Checksum beam not found - integrity check required
+    ChecksumMissing,
     /// Invalid Moifeu beam
     InvalidBeam(MoifeuError),
     /// Beam sequence too long
@@ -113,6 +115,9 @@ impl std::fmt::Display for MoifeuGradientError {
             }
             MoifeuGradientError::EmptyData => {
                 write!(f, "No data beams found in sequence")
+            }
+            MoifeuGradientError::ChecksumMissing => {
+                write!(f, "Checksum beam not found - encoded data requires integrity verification")
             }
             MoifeuGradientError::InvalidBeam(e) => {
                 write!(f, "Invalid Moifeu beam: {}", e)
@@ -169,7 +174,7 @@ pub fn encode_text_to_beams(
     let mut beams = Vec::with_capacity(bytes.len() * 2 + 10);
     
     // Add start sentinel
-    beams.push(create_sentinel_beam(seat_id, SENTINEL_START_OP, context.clone(), true));
+    beams.push(create_sentinel_beam(seat_id, SENTINEL_START_OP, context.clone(), true)?);
     
     // Encode each byte as two 4-bit nibbles
     for (idx, &byte) in bytes.iter().enumerate() {
@@ -195,7 +200,7 @@ pub fn encode_text_to_beams(
     beams.push(checksum_beam);
     
     // Add end sentinel
-    let end_beam = create_sentinel_beam(seat_id, SENTINEL_END_OP, context, false);
+    let end_beam = create_sentinel_beam(seat_id, SENTINEL_END_OP, context, false)?;
     beams.push(end_beam);
     
     // Verify we didn't exceed max beam count
@@ -219,7 +224,7 @@ pub fn encode_bytes_to_beams(
     let mut beams = Vec::with_capacity(data.len() * 2 + 10);
     
     // Start sentinel
-    beams.push(create_sentinel_beam(seat_id, SENTINEL_START_OP, context.clone(), true));
+    beams.push(create_sentinel_beam(seat_id, SENTINEL_START_OP, context.clone(), true)?);
     
     // Encode each byte
     for (idx, &byte) in data.iter().enumerate() {
@@ -237,7 +242,7 @@ pub fn encode_bytes_to_beams(
     beams.push(checksum_beam);
     
     // End sentinel
-    beams.push(create_sentinel_beam(seat_id, SENTINEL_END_OP, context, false));
+    beams.push(create_sentinel_beam(seat_id, SENTINEL_END_OP, context, false)?);
     
     if beams.len() > MAX_BEAM_SEQUENCE {
         return Err(MoifeuGradientError::BeamSequenceTooLong(beams.len()));
@@ -252,7 +257,7 @@ fn create_sentinel_beam(
     op: &str,
     context: Option<String>,
     is_start: bool,
-) -> MoifeuBeam {
+) -> Result<MoifeuBeam, MoifeuGradientError> {
     let mut builder = MoifeuBeamBuilder::new()
         .op_class(0)  // Reserved for system operations
         .op_level(0)  // System level
@@ -264,7 +269,7 @@ fn create_sentinel_beam(
         builder = builder.context(ctx);
     }
     builder.build()
-        .expect("Failed to build sentinel beam")
+        .map_err(MoifeuGradientError::InvalidBeam)
 }
 
 /// Encodes a 4-bit nibble into a Moifeu beam
@@ -310,30 +315,31 @@ fn encode_nibble_to_beam(
 
 /// Encodes a checksum value into a Moifeu beam
 ///
-/// Uses colour and depth to encode checksum value mod 50
-/// colour encodes (checksum % 5) as one of 5 values
-/// depth encodes ((checksum / 5) % 10) as 0-9
-/// This gives us 5 * 10 = 50 possible values
+/// Uses colour and depth to encode checksum value mod 40
+/// colour encodes (checksum % 4) as one of 4 values (b,g,y,r)
+/// depth encodes ((checksum / 4) % 10) as 0-9
+/// This gives us 4 * 10 = 40 possible values
+/// Note: We avoid 'w' (white) since it requires op_class=2 (stream priority)
 fn encode_checksum_to_beam(
     checksum: u16,
     phase: u8,
     seat_id: u8,
     _context: Option<String>,
 ) -> Result<MoifeuBeam, MoifeuGradientError> {
-    // Store checksum mod 50 for 50 possible values (5 colours * 10 depths)
-    let checksum_mod = checksum % 50;
+    // Store checksum mod 40 for 40 possible values (4 colours * 10 depths)
+    // We use 4 colours (b,g,y,r) to avoid white which requires op_class=2
+    let checksum_mod = checksum % 40;
     
     // Encode in colour and depth
-    let colour_idx = checksum_mod % 5;
-    let depth_val = (checksum_mod / 5) as u8;  // 0-9 since checksum_mod is 0-49
+    let colour_idx = checksum_mod % 4;  // 0-3
+    let depth_val = (checksum_mod / 4) as u8;  // 0-9 since checksum_mod is 0-39
     
     let kappa = match colour_idx {
         0 => 'b',
         1 => 'g',
         2 => 'y',
         3 => 'r',
-        4 => 'y',  // Use yellow instead of white to avoid stream priority issue
-        _ => 'g',
+        _ => 'g',  // Shouldn't happen with mod 4
     };
     
     MoifeuBeamBuilder::new()
@@ -412,10 +418,9 @@ pub fn decode_beams_to_bytes(
         }
     }
     
-    // Verify checksum if present
-    if let Some(beam) = checksum_beam {
-        verify_beam_checksum(&bytes, beam)?;
-    }
+    // Checksum is MANDATORY - must be present
+    let checksum_beam = checksum_beam.ok_or(MoifeuGradientError::ChecksumMissing)?;
+    verify_beam_checksum(&bytes, checksum_beam)?;
     
     Ok(bytes)
 }
@@ -469,21 +474,22 @@ fn verify_beam_checksum(
     beam: &MoifeuBeam,
 ) -> Result<(), MoifeuGradientError> {
     // Decode expected checksum from beam
+    // We use 4 colours (b,g,y,r) and 10 depths = 40 possible values
     let colour_idx = match beam.colour {
         'b' => 0,
         'g' => 1,
         'y' => 2,
         'r' => 3,
-        'w' => 4,
+        'w' => 0,  // White shouldn't appear, treat as 0
         _ => 0,
     };
     let depth_val = beam.depth as u16;
-    // Reverse the encoding: checksum_mod = colour_idx + depth_val * 5
-    let expected_checksum_mod = (colour_idx as u16) + depth_val * 5;
+    // Reverse the encoding: checksum_mod = colour_idx + depth_val * 4
+    let expected_checksum_mod = (colour_idx as u16) + depth_val * 4;
     
     // Compute actual checksum for all data
     let actual_checksum = compute_checksum(bytes);
-    let actual_checksum_mod = actual_checksum % 50;  // mod 50 to match encoding
+    let actual_checksum_mod = actual_checksum % 40;  // mod 40 to match encoding
     
     if expected_checksum_mod != actual_checksum_mod {
         return Err(MoifeuGradientError::ChecksumMismatch {
@@ -548,7 +554,7 @@ pub fn beams_to_gradient_cells(
 /// Converts GradientCells back to Moifeu beams
 pub fn gradient_cells_to_beams(
     cells: &[GradientCell],
-) -> Vec<MoifeuBeam> {
+) -> Result<Vec<MoifeuBeam>, MoifeuGradientError> {
     cells.iter()
         .map(|cell| {
             let colour = match cell.hue {
@@ -567,7 +573,7 @@ pub fn gradient_cells_to_beams(
                 .input(cell.whisper.clone())
                 .operation("GRADIENT".to_string())
                 .build()
-                .expect("Failed to build gradient cell beam")
+                .map_err(MoifeuGradientError::InvalidBeam)
         })
         .collect()
 }
@@ -639,7 +645,7 @@ pub fn decode_from_lenia_field(
     base_gy: i32,
     width: i32,
     height: i32,
-) -> Vec<MoifeuBeam> {
+) -> Result<Vec<MoifeuBeam>, MoifeuGradientError> {
     let mut cells = Vec::new();
     
     for dy in 0..height {
@@ -748,7 +754,7 @@ mod tests {
         assert!(!cells.is_empty());
         
         // Verify we can convert back
-        let beams2 = gradient_cells_to_beams(&cells);
+        let beams2 = gradient_cells_to_beams(&cells).expect("Should convert cells to beams");
         assert_eq!(beams.len(), beams2.len());
     }
     
@@ -810,15 +816,18 @@ mod tests {
         assert!(!field.is_empty());
         
         // Decode back (will be lossy for large payloads)
-        let beams = decode_from_lenia_field(&field, 0, 0, 8, 8);
+        let beams = decode_from_lenia_field(&field, 0, 0, 8, 8)
+            .expect("Should decode from field");
         assert!(!beams.is_empty());
     }
     
     #[test]
     fn test_empty_data_error() {
         let beams = vec![
-            create_sentinel_beam(13, SENTINEL_START_OP, Some("Test".to_string()), true),
-            create_sentinel_beam(13, SENTINEL_END_OP, Some("Test".to_string()), false),
+            create_sentinel_beam(13, SENTINEL_START_OP, Some("Test".to_string()), true)
+                .expect("Should create start sentinel"),
+            create_sentinel_beam(13, SENTINEL_END_OP, Some("Test".to_string()), false)
+                .expect("Should create end sentinel"),
         ];
         
         let result = decode_beams_to_bytes(&beams);
@@ -839,5 +848,21 @@ mod tests {
         
         let result = decode_beams_to_bytes(&beams_no_sentinels);
         assert!(matches!(result, Err(MoifeuGradientError::SentinelNotFound)));
+    }
+    
+    #[test]
+    fn test_checksum_missing_error() {
+        let text = "Test";
+        let beams = encode_text_to_beams(text, 13, Some("Test".to_string()))
+            .expect("Should encode");
+        
+        // Remove checksum beam (op_level=0, op="CHECKSUM")
+        let beams_no_checksum: Vec<MoifeuBeam> = beams.iter()
+            .filter(|b| !(b.op_level == 0 && b.op.as_deref() == Some(CHECKSUM_OP)))
+            .cloned()
+            .collect();
+        
+        let result = decode_beams_to_bytes(&beams_no_checksum);
+        assert!(matches!(result, Err(MoifeuGradientError::ChecksumMissing)));
     }
 }
