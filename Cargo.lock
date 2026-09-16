@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "alamot-core"
+name = "a_la_mort-core"
 version = "1.0.0"
 dependencies = [
  "lazy_static",
@@ -14,10 +14,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "alamot-moifeu"
+name = "a_la_mort-moifeu"
 version = "1.0.0"
 dependencies = [
- "alamot-core",
+ "a_la_mort-core",
  "futures-util",
  "rand 0.8.8",
  "serde",

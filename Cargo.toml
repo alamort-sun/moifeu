@@ -1,5 +1,5 @@
 [package]
-name = "alamot-moifeu"
+name = "a_la_mort-moifeu"
 version = "1.0.0"
 edition = "2021"
 
@@ -19,7 +19,7 @@ tokio = { version = "1", features = ["full"] }
 url = "2"
 futures-util = "0.3"
 rand = "0.8"
-alamot-core = { path = "../core" }
+a_la_mort-core = { path = "../core" }
 
 [profile.release]
 opt-level = "s"

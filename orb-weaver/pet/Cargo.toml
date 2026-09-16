@@ -1,0 +1,11 @@
+[package]
+name = "orb-weaver-pet"
+version = "0.1.0"
+edition = "2021"
+[lib]
+crate-type = ["cdylib", "rlib"]
+[workspace]
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"

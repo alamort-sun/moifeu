@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#10191e"><title>Orb — a little procedural life</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<canvas id="habitat" aria-label="An interactive orb-weaver spider in a moonlit habitat"></canvas>
+<header><a class="wordmark" href="#" aria-label="Orb home">orb<span>✳</span></a><div class="edition">A LITTLE PROCEDURAL LIFE<span>NO. 001 · ORB-WEAVER</span></div><button id="pause" class="quiet" aria-pressed="false">Pause</button></header>
+<main><div class="intro"><div class="eyebrow"><i></i> YOUR SMALL COMPANION</div><h1>Let a little<br>life unfold.</h1><p>Eight feet. A thread of curiosity.<br>Somewhere quiet to just be.</p></div>
+<aside class="fieldnotes"><span class="smallcaps">FIELD NOTES</span><div id="mood">Exploring, at her own pace.</div><p id="hint">Choose Follow, then move your pointer.<br>Tap near her to say hello.</p></aside>
+<div id="loading" role="status">Waking up your orb-weaver…</div>
+<div class="bottom"><section class="controls" aria-label="Pet behavior"><button data-mode="0" class="selected" aria-pressed="true"><span>⌁</span> Wander</button><button data-mode="1" aria-pressed="false"><span>↗</span> Follow</button><button data-mode="2" aria-pressed="false"><span>☾</span> Rest</button><button data-mode="3" aria-pressed="false"><span>✳</span> Weave</button></section><div class="caption">A world in miniature. Made of motion, not a loop.</div></div>
+<details class="settings"><summary aria-label="Open habitat settings">Habitat <span>＋</span></summary><div class="settings-body"><label>Curiosity <input id="curiosity" type="range" min="0" max="1" step="0.01" value="0.6"></label><label>Alertness <input id="tension" type="range" min="0" max="1" step="0.01" value="0.2"></label><label class="check"><input id="terrain" type="checkbox"> Stepping stones</label><label class="check"><input id="debug" type="checkbox"> Show movement study</label><button id="clear" class="quiet">Clear silk</button><button id="reset" class="quiet">Start anew</button></div></details>
+</main><footer><span>EIGHT FEET · ONE SMALL WORLD</span><span id="activity" aria-live="polite">Wandering</span></footer>
+<script type="module" src="app.js"></script></body></html>
