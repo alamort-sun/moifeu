@@ -142,6 +142,7 @@ pub type ParseResult<T> = Result<T, MoifeuError>;
 
 const OPS: &[&str] = &[
     "tr", "sm", "an", "gen", "ex", "cl", "cmp", "fix", "exp", "fmt", "chk", "cvt", "red",
+    "GRAD_START", "GRAD_END", "CHECKSUM", "DATA", "GRADIENT",
 ];
 const MODS: &[&str] = &["brf", "det", "fml", "inf", "json", "txt", "code", "tbl"];
 const LANGS: &[&str] = &[
@@ -316,7 +317,7 @@ fn parse_body(
             }
         } else if let Some(r) = tok.strip_prefix('<') {
             output = Some(r.to_string());
-        } else if tok.contains('>') && !tok.starts_with('<') {
+        } else if tok.contains('>') && !tok.starts_with('<') && !tok.starts_with('>') {
             let parts: Vec<&str> = tok.split('>').collect();
             if parts.len() == 2 && LANGS.contains(&parts[0]) && LANGS.contains(&parts[1]) {
                 src_lang = Some(parts[0].to_string());
